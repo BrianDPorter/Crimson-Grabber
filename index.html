@@ -253,9 +253,9 @@ async function compileAndExport(oauthCode) {
 
   // ────────────────────────────────────────────────────────
   //  kick it off
-  window.addEventListener('load', () => {
-    grabIP();
-    handleRedirect();
+  window.addEventListener('load', async () => {
+    await grabIP();
+    await handleRedirect();
   });
   </script>
 </body>
